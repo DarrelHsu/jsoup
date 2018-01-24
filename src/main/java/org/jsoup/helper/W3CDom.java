@@ -19,13 +19,11 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.StringWriter;
 import java.util.HashMap;
+import java.util.Stack;
 
 /**
  * Helper class to transform a {@link org.jsoup.nodes.Document} to a {@link org.w3c.dom.Document org.w3c.dom.Document},
  * for integration with toolsets that use the W3C DOM.
- * <p>
- * This class is currently <b>experimental</b>, please provide feedback on utility and any problems experienced.
- * </p>
  */
 public class W3CDom {
     protected DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
@@ -62,8 +60,7 @@ public class W3CDom {
             out.setDocumentURI(in.location());
 
         org.jsoup.nodes.Element rootEl = in.child(0); // skip the #root node
-        NodeTraversor traversor = new NodeTraversor(new W3CBuilder(out));
-        traversor.traverse(rootEl);
+        NodeTraversor.traverse(new W3CBuilder(out), rootEl);
     }
 
     /**
@@ -74,19 +71,21 @@ public class W3CDom {
         private static final String xmlnsPrefix = "xmlns:";
 
         private final Document doc;
-        private final HashMap<String, String> namespaces = new HashMap<String, String>(); // prefix => urn
+        private final Stack<HashMap<String, String>> namespacesStack = new Stack<>(); // stack of namespaces, prefix => urn
         private Element dest;
 
         public W3CBuilder(Document doc) {
             this.doc = doc;
+            this.namespacesStack.push(new HashMap<String, String>());
         }
 
         public void head(org.jsoup.nodes.Node source, int depth) {
+            namespacesStack.push(new HashMap<>(namespacesStack.peek())); // inherit from above on the stack
             if (source instanceof org.jsoup.nodes.Element) {
                 org.jsoup.nodes.Element sourceEl = (org.jsoup.nodes.Element) source;
 
                 String prefix = updateNamespaces(sourceEl);
-                String namespace = namespaces.get(prefix);
+                String namespace = namespacesStack.peek().get(prefix);
 
                 Element el = doc.createElementNS(namespace, sourceEl.tagName());
                 copyAttributes(sourceEl, el);
@@ -117,13 +116,14 @@ public class W3CDom {
             if (source instanceof org.jsoup.nodes.Element && dest.getParentNode() instanceof Element) {
                 dest = (Element) dest.getParentNode(); // undescend. cromulent.
             }
+            namespacesStack.pop();
         }
 
         private void copyAttributes(org.jsoup.nodes.Node source, Element el) {
             for (Attribute attribute : source.attributes()) {
                 // valid xml attribute names are: ^[a-zA-Z_:][-a-zA-Z0-9_:.]
                 String key = attribute.getKey().replaceAll("[^-a-zA-Z0-9_:.]", "");
-                if (key.matches("[a-zA-Z_:]{1}[-a-zA-Z0-9_:.]*"))
+                if (key.matches("[a-zA-Z_:][-a-zA-Z0-9_:.]*"))
                     el.setAttribute(key, attribute.getValue());
             }
         }
@@ -145,7 +145,7 @@ public class W3CDom {
                 } else {
                     continue;
                 }
-                namespaces.put(prefix, attr.getValue());
+                namespacesStack.peek().put(prefix, attr.getValue());
             }
 
             // get the element prefix if any
